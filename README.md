@@ -233,3 +233,76 @@ public class NetworkLatencyController {
     }
 }
 ```
+
+
+
+@Configuration
+public class DruidConfig {
+
+    @Bean
+    public ServletRegistrationBean<StatViewServlet> druidStatViewServlet() {
+        ServletRegistrationBean<StatViewServlet> reg = new ServletRegistrationBean<>(
+            new StatViewServlet(), "/druid/*"
+        );
+        
+        // 添加监控页面访问控制
+        reg.addInitParameter("loginUsername", "admin"); // 监控页登录用户名
+        reg.addInitParameter("loginPassword", "druid123"); // 监控页登录密码
+        reg.addInitParameter("resetEnable", "false"); // 禁用重置功能
+        
+        // IP白名单（没有配置则允许所有访问）
+        reg.addInitParameter("allow", "127.0.0.1,192.168.1.100");
+        
+        // IP黑名单（优先级高于白名单）
+        // reg.addInitParameter("deny", "192.168.1.73");
+        
+        return reg;
+    }
+
+    @Bean
+    public FilterRegistrationBean<WebStatFilter> druidWebStatFilter() {
+        FilterRegistrationBean<WebStatFilter> reg = new FilterRegistrationBean<>(
+            new WebStatFilter()
+        );
+        
+        // 添加URL过滤规则
+        reg.addUrlPatterns("/*");
+        
+        // 排除静态资源和不需要监控的请求
+        reg.addInitParameter("exclusions", 
+            "*.js,*.gif,*.jpg,*.png,*.css,*.ico,/druid/*");
+        
+        // 开启session统计功能
+        reg.addInitParameter("sessionStatEnable", "true");
+        
+        // 配置profileEnable能够监控单个URL调用的SQL列表
+        reg.addInitParameter("profileEnable", "true");
+        
+        return reg;
+    }
+}
+
+@Bean
+@ConfigurationProperties("spring.datasource.druid")
+public DataSource druidDataSource() {
+    DruidDataSource ds = new DruidDataSource();
+    
+    // 开启监控统计功能
+    ds.setFilters("stat,wall");
+    
+    // SQL防火墙配置
+    WallConfig wallConfig = new WallConfig();
+    wallConfig.setDropTableAllow(false); // 禁止删表
+    WallFilter wallFilter = new WallFilter();
+    wallFilter.setConfig(wallConfig);
+    
+    // 添加过滤器
+    try {
+        ds.getProxyFilters().add(wallFilter);
+    } catch (SQLException e) {
+        throw new RuntimeException("Druid filter init failed");
+    }
+    
+    return ds;
+}
+
