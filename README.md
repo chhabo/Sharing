@@ -306,3 +306,71 @@ public DataSource druidDataSource() {
     return ds;
 }
 
+import com.alibaba.druid.spring.boot3.autoconfigure.DruidDataSourceAutoConfigure;
+import com.alibaba.druid.spring.boot3.autoconfigure.properties.DruidStatProperties;
+import com.alibaba.druid.support.http.StatViewServlet;
+import com.alibaba.druid.support.http.WebStatFilter;
+import org.springframework.boot.autoconfigure.AutoConfigureAfter;
+import org.springframework.boot.web.servlet.FilterRegistrationBean;
+import org.springframework.boot.web.servlet.ServletRegistrationBean;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.Map;
+
+@Configuration
+@AutoConfigureAfter(DruidDataSourceAutoConfigure.class) // 确保在数据源初始化后配置
+public class DruidMonitorConfig {
+
+    /**
+     * 配置监控页面 Servlet
+     */
+    @Bean
+    public ServletRegistrationBean<StatViewServlet> druidStatViewServlet() {
+        ServletRegistrationBean<StatViewServlet> reg = new ServletRegistrationBean<>(
+                new StatViewServlet(), "/druid/*");
+        
+        // 安全配置
+        Map<String, String> initParams = new HashMap<>();
+        initParams.put("loginUsername", "druidAdmin"); // 监控页登录账号
+        initParams.put("loginPassword", "securePass123!"); // 监控页登录密码
+        initParams.put("resetEnable", "false"); // 禁用重置功能
+        
+        // 访问控制（生产环境必须配置）
+        initParams.put("allow", "127.0.0.1,192.168.1.0/24"); 
+        initParams.put("deny", "192.168.1.100"); 
+        
+        reg.setInitParameters(initParams);
+        return reg;
+    }
+
+    /**
+     * 配置 Web 监控过滤器
+     */
+    @Bean
+    public FilterRegistrationBean<WebStatFilter> druidWebStatFilter() {
+        FilterRegistrationBean<WebStatFilter> reg = new FilterRegistrationBean<>();
+        reg.setFilter(new WebStatFilter());
+        
+        Map<String, String> initParams = new HashMap<>();
+        initParams.put("exclusions", "*.js,*.css,*.ico,/druid/*"); // 排除静态资源
+        initParams.put("sessionStatEnable", "true"); // 开启 session 统计
+        initParams.put("profileEnable", "true"); // 开启单个 URL 的 SQL 监控
+        
+        reg.setInitParameters(initParams);
+        reg.setUrlPatterns(Collections.singletonList("/*"));
+        return reg;
+    }
+
+    /**
+     * 配置 SQL 防火墙（可选但推荐）
+     */
+    @Bean
+    public DruidStatProperties druidStatProperties() {
+        DruidStatProperties properties = new DruidStatProperties();
+        properties.setFilter("stat,wall,slf4j"); // 启用统计、防火墙和日志
+        return properties;
+    }
+}
