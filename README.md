@@ -374,3 +374,97 @@ public class DruidMonitorConfig {
         return properties;
     }
 }
+
+
+
+<dependencies>
+    <!-- Hazelcast 核心依赖 -->
+    <dependency>
+        <groupId>com.hazelcast</groupId>
+        <artifactId>hazelcast</artifactId>
+        <version>5.3.6</version>
+    </dependency>
+    
+    <!-- Spring Boot 集成支持 -->
+    <dependency>
+        <groupId>com.hazelcast</groupId>
+        <artifactId>hazelcast-spring</artifactId>
+        <version>5.3.6</version>
+    </dependency>
+    
+    <!-- Spring Boot 缓存支持 -->
+    <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-cache</artifactId>
+    </dependency>
+</dependencies>
+
+
+import com.hazelcast.config.*;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+
+@Configuration
+public class HazelcastConfig {
+
+    @Bean
+    public Config hazelcastConfiguration() {
+        Config config = new Config();
+        config.setClusterName("dev-cluster");
+        
+        // 网络配置 - 使用默认组播发现
+        NetworkConfig network = config.getNetworkConfig();
+        network.setPort(5701).setPortAutoIncrement(true);
+        
+        JoinConfig join = network.getJoin();
+        join.getMulticastConfig().setEnabled(true); // 启用组播发现
+        
+        // 缓存配置示例
+        MapConfig mapConfig = new MapConfig();
+        mapConfig.setName("defaultCache");
+        mapConfig.setTimeToLiveSeconds(300); // 5分钟过期
+        config.addMapConfig(mapConfig);
+        
+        return config;
+    }
+}
+
+# 使用 Hazelcast 作为缓存提供者
+spring.cache.type=hazelcast
+
+# 配置 Hazelcast 实例名称（可选）
+spring.hazelcast.instance-name=my-hazelcast-instance
+
+# 缓存管理器配置
+spring.cache.hazelcast.config=classpath:hazelcast.xml
+
+
+management.endpoints.web.exposure.include=health,info,hazelcast
+
+
+@Bean
+public Config hazelcastConfiguration() {
+    Config config = new Config();
+    
+    // 用户缓存配置
+    MapConfig userCache = new MapConfig();
+    userCache.setName("userCache");
+    userCache.setTimeToLiveSeconds(1800); // 30分钟
+    userCache.setMaxSizeConfig(new MaxSizeConfig(1000, MaxSizePolicy.PER_NODE));
+    
+    // 产品缓存配置
+    MapConfig productCache = new MapConfig();
+    productCache.setName("productCache");
+    productCache.setTimeToLiveSeconds(3600); // 1小时
+    productCache.setEvictionConfig(new EvictionConfig()
+        .setEvictionPolicy(EvictionPolicy.LRU)
+        .setMaxSizePolicy(MaxSizePolicy.PER_NODE)
+        .setSize(2000));
+    
+    config.addMapConfig(userCache);
+    config.addMapConfig(productCache);
+    
+    return config;
+}
+
+
