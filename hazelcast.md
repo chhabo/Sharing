@@ -1342,3 +1342,317 @@ public class PaymentService {
 10. 无侵入设计：业务代码无需关注具体锁实现
 
 这个设计提供了灵活、可扩展的分布式锁解决方案，可以轻松集成到 Spring Boot 项目中，并支持未来扩展其他分布式锁实现。
+
+
+
+
+
+
+
+
+#——————————————————————————————————————————————
+
+您说得对，在 Hazelcast 5.5.0 中，
+"ILock" 类已被弃用并替换为 
+"FencedLock"。感谢您的指正！以下是更新后的 Hazelcast 分布式锁实现，使用 Hazelcast 5.5.0 的 
+"FencedLock"：
+
+package com.example.lock.impl;
+
+import com.example.lock.DistributedLock;
+import com.hazelcast.core.HazelcastInstance;
+import com.hazelcast.cp.lock.FencedLock;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.stereotype.Component;
+
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.Condition;
+
+@Component
+@ConditionalOnProperty(name = "distributed.lock.type", havingValue = "HAZELCAST")
+public class HazelcastDistributedLock implements DistributedLock {
+
+    private final HazelcastInstance hazelcastInstance;
+    private final ConcurrentHashMap<String, FencedLock> lockCache = new ConcurrentHashMap<>();
+
+    @Autowired
+    public HazelcastDistributedLock(HazelcastInstance hazelcastInstance) {
+        this.hazelcastInstance = hazelcastInstance;
+    }
+
+    private FencedLock getLock(String key) {
+        return lockCache.computeIfAbsent(key, k -> 
+            hazelcastInstance.getCPSubsystem().getLock(k)
+        );
+    }
+
+    @Override
+    public void lock(String key) {
+        getLock(key).lock();
+    }
+
+    @Override
+    public void lockInterruptibly(String key) throws InterruptedException {
+        getLock(key).lockInterruptibly();
+    }
+
+    @Override
+    public boolean tryLock(String key) {
+        return getLock(key).tryLock();
+    }
+
+    @Override
+    public boolean tryLock(String key, long time, TimeUnit unit) throws InterruptedException {
+        return getLock(key).tryLock(time, unit);
+    }
+
+    @Override
+    public void unlock(String key) {
+        getLock(key).unlock();
+    }
+
+    @Override
+    public Condition newCondition() {
+        throw new UnsupportedOperationException("Conditions not supported in Hazelcast distributed locks");
+    }
+
+    @Override
+    public boolean isLocked(String key) {
+        return getLock(key).isLocked();
+    }
+
+    @Override
+    public long getLockCount(String key) {
+        return getLock(key).getLockCount();
+    }
+
+    @Override
+    public boolean isLockedByCurrentThread(String key) {
+        return getLock(key).isLockedByCurrentThread();
+    }
+
+    // 以下方法实现无key的锁操作（默认使用全局锁）
+    @Override
+    public void lock() {
+        lock("global_lock");
+    }
+
+    @Override
+    public void lockInterruptibly() throws InterruptedException {
+        lockInterruptibly("global_lock");
+    }
+
+    @Override
+    public boolean tryLock() {
+        return tryLock("global_lock");
+    }
+
+    @Override
+    public boolean tryLock(long time, TimeUnit unit) throws InterruptedException {
+        return tryLock("global_lock", time, unit);
+    }
+
+    @Override
+    public void unlock() {
+        unlock("global_lock");
+    }
+}
+
+更新后的分布式锁接口
+
+为了更好支持 Hazelcast 5.5.0 的特性，我扩展了锁接口：
+
+package com.example.lock;
+
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.Lock;
+
+/**
+ * 分布式锁接口
+ */
+public interface DistributedLock extends Lock {
+
+    /**
+     * 获取锁（可重入）
+     * 
+     * @param key 锁的键值
+     */
+    void lock(String key);
+
+    /**
+     * 尝试获取锁
+     * 
+     * @param key 锁的键值
+     * @return true 如果成功获取锁
+     */
+    boolean tryLock(String key);
+
+    /**
+     * 尝试获取锁（带超时）
+     * 
+     * @param key 锁的键值
+     * @param time 超时时间
+     * @param unit 时间单位
+     * @return true 如果成功获取锁
+     * @throws InterruptedException 如果线程被中断
+     */
+    boolean tryLock(String key, long time, TimeUnit unit) throws InterruptedException;
+
+    /**
+     * 释放锁
+     * 
+     * @param key 锁的键值
+     */
+    void unlock(String key);
+
+    /**
+     * 检查锁是否被持有
+     * 
+     * @param key 锁的键值
+     * @return true 如果锁被持有
+     */
+    boolean isLocked(String key);
+    
+    /**
+     * 获取当前线程持有锁的次数
+     * 
+     * @param key 锁的键值
+     * @return 持有锁的次数
+     */
+    long getLockCount(String key);
+    
+    /**
+     * 检查锁是否被当前线程持有
+     * 
+     * @param key 锁的键值
+     * @return true 如果锁被当前线程持有
+     */
+    boolean isLockedByCurrentThread(String key);
+}
+
+Hazelcast 5.5.0 配置注意事项
+
+在 Hazelcast 5.5.0 中，CP 子系统的配置有所变化：
+
+hazelcast:
+  cp-subsystem:
+    cp-member-count: 3 # Raft 组节点数（建议奇数）
+    group-size: 3      # 与 cp-member-count 相同
+    session-time-to-live-seconds: 300
+    missing-cp-member-auto-removal-seconds: 14400
+    fail-on-indeterminate-operation-state: false
+    data-load-timeout-seconds: 300
+
+使用 FencedLock 的高级特性
+
+Hazelcast 的 
+"FencedLock" 提供了额外的功能：
+
+// 获取锁的fence token（用于顺序保证）
+long fenceToken = lock.getFence();
+
+// 检查当前锁的fence token
+long currentFence = lock.getFence();
+
+// 使用锁保护临界区
+lock.lock();
+try {
+    // 业务逻辑
+} finally {
+    lock.unlock();
+}
+
+// 尝试锁并获取fence token
+Long fence = lock.tryLockAndGetFence();
+if (fence != null) {
+    try {
+        // 业务逻辑
+    } finally {
+        lock.unlock();
+    }
+}
+
+自动配置更新
+
+确保 Hazelcast 实例已配置 CP 子系统：
+
+@Configuration
+public class HazelcastConfig {
+
+    @Bean
+    public Config hazelcastConfig(LockProperties lockProperties) {
+        Config config = new Config();
+        
+        // 配置 CP 子系统
+        CPSubsystemConfig cpSubsystemConfig = new CPSubsystemConfig();
+        cpSubsystemConfig.setCPMemberCount(lockProperties.getCpMemberCount());
+        cpSubsystemConfig.setGroupSize(lockProperties.getCpMemberCount());
+        cpSubsystemConfig.setSessionTimeToLiveSeconds(lockProperties.getSessionTTL());
+        config.setCPSubsystemConfig(cpSubsystemConfig);
+        
+        // 其他配置...
+        return config;
+    }
+}
+
+锁工具类（使用 FencedLock）
+
+@Component
+public class LockUtil {
+
+    private final DistributedLock lock;
+
+    public LockUtil(DistributedLock lock) {
+        this.lock = lock;
+    }
+
+    public <T> T executeWithLock(String key, Supplier<T> supplier) {
+        lock.lock(key);
+        try {
+            return supplier.get();
+        } finally {
+            lock.unlock(key);
+        }
+    }
+
+    public void executeWithLock(String key, Runnable runnable) {
+        lock.lock(key);
+        try {
+            runnable.run();
+        } finally {
+            lock.unlock(key);
+        }
+    }
+
+    public <T> T tryExecuteWithLock(String key, long timeout, TimeUnit unit, Supplier<T> supplier) {
+        try {
+            if (lock.tryLock(key, timeout, unit)) {
+                try {
+                    return supplier.get();
+                } finally {
+                    lock.unlock(key);
+                }
+            }
+            return null;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return null;
+        }
+    }
+}
+
+最佳实践
+
+1. 锁粒度：使用业务特定键值（如用户ID、订单ID）而非全局锁
+2. 超时设置：总是使用带超时的 
+"tryLock" 方法
+3. 锁释放：在 finally 块中确保锁释放
+4. 重入检查：使用 
+"isLockedByCurrentThread" 避免重复加锁
+5. CP 配置：确保 CP 子系统正确配置（奇数节点）
+6. 监控：监控锁的持有时间和争用情况
+
+这个更新后的实现完全兼容 Hazelcast 5.5.0，并利用了新的 
+"FencedLock" API 提供的功能。
