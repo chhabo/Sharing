@@ -1,3 +1,440 @@
+
+通过配置控制 Hazelcast 使用 Multicast 或 Kubernetes 发现机制
+
+在 Spring Boot 应用中，可以通过外部配置灵活控制 Hazelcast 使用 Multicast 或 Kubernetes 服务发现机制。以下是完整的实现方案：
+
+1. 配置属性设计
+
+在 
+"application.yml" 中添加配置属性：
+
+hazelcast:
+  discovery:
+    # 可选值: MULTICAST, KUBERNETES
+    type: KUBERNETES
+    multicast:
+      enabled: false
+      group: 224.2.2.3
+      port: 54327
+    kubernetes:
+      enabled: true
+      namespace: default
+      service-name: hazelcast-service
+      resolve-not-ready-addresses: true
+
+2. 配置属性类
+
+import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.stereotype.Component;
+
+@Component
+@ConfigurationProperties(prefix = "hazelcast.discovery")
+public class HazelcastDiscoveryProperties {
+
+    private DiscoveryType type = DiscoveryType.KUBERNETES;
+    private MulticastProperties multicast = new MulticastProperties();
+    private KubernetesProperties kubernetes = new KubernetesProperties();
+
+    public enum DiscoveryType {
+        MULTICAST, KUBERNETES
+    }
+
+    public static class MulticastProperties {
+        private boolean enabled = false;
+        private String group = "224.2.2.3";
+        private int port = 54327;
+
+        // Getters and Setters
+    }
+
+    public static class KubernetesProperties {
+        private boolean enabled = true;
+        private String namespace = "default";
+        private String serviceName = "hazelcast-service";
+        private boolean resolveNotReadyAddresses = true;
+
+        // Getters and Setters
+    }
+
+    // Getters and Setters
+}
+
+3. 动态 Hazelcast 配置
+
+import com.hazelcast.config.Config;
+import com.hazelcast.config.JoinConfig;
+import com.hazelcast.config.NetworkConfig;
+import com.hazelcast.config.TcpIpConfig;
+import com.hazelcast.kubernetes.HazelcastKubernetesDiscoveryStrategyFactory;
+import com.hazelcast.spi.discovery.integration.DiscoveryServiceProvider;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+
+@Configuration
+public class HazelcastDynamicConfig {
+
+    private final HazelcastDiscoveryProperties discoveryProperties;
+
+    @Autowired
+    public HazelcastDynamicConfig(HazelcastDiscoveryProperties discoveryProperties) {
+        this.discoveryProperties = discoveryProperties;
+    }
+
+    @Bean
+    public Config hazelcastConfig() {
+        Config config = new Config();
+        config.setClusterName("dynamic-discovery-cluster");
+        
+        NetworkConfig networkConfig = config.getNetworkConfig();
+        networkConfig.setPort(5701).setPortAutoIncrement(true);
+        
+        JoinConfig joinConfig = networkConfig.getJoin();
+        
+        // 禁用所有默认发现机制
+        joinConfig.getMulticastConfig().setEnabled(false);
+        joinConfig.getTcpIpConfig().setEnabled(false);
+        joinConfig.getAwsConfig().setEnabled(false);
+        joinConfig.getGcpConfig().setEnabled(false);
+        joinConfig.getAzureConfig().setEnabled(false);
+        joinConfig.getKubernetesConfig().setEnabled(false);
+        
+        // 根据配置启用指定的发现机制
+        switch (discoveryProperties.getType()) {
+            case MULTICAST:
+                configureMulticast(joinConfig);
+                break;
+            case KUBERNETES:
+                configureKubernetes(joinConfig);
+                break;
+            default:
+                throw new IllegalArgumentException("Unsupported discovery type: " + discoveryProperties.getType());
+        }
+        
+        return config;
+    }
+
+    private void configureMulticast(JoinConfig joinConfig) {
+        HazelcastDiscoveryProperties.MulticastProperties multicast = discoveryProperties.getMulticast();
+        
+        joinConfig.getMulticastConfig()
+            .setEnabled(true)
+            .setMulticastGroup(multicast.getGroup())
+            .setMulticastPort(multicast.getPort());
+    }
+
+    private void configureKubernetes(JoinConfig joinConfig) {
+        HazelcastDiscoveryProperties.KubernetesProperties kubernetes = discoveryProperties.getKubernetes();
+        
+        joinConfig.getKubernetesConfig()
+            .setEnabled(true)
+            .setProperty("namespace", kubernetes.getNamespace())
+            .setProperty("service-name", kubernetes.getServiceName())
+            .setProperty("resolve-not-ready-addresses", String.valueOf(kubernetes.isResolveNotReadyAddresses()));
+    }
+}
+
+4. 使用 Spring Profile 进行环境区分
+
+application-dev.yml (开发环境使用 Multicast)
+
+spring:
+  profiles: dev
+
+hazelcast:
+  discovery:
+    type: MULTICAST
+    multicast:
+      enabled: true
+      group: 224.2.2.3
+      port: 54327
+
+application-prod.yml (生产环境使用 Kubernetes)
+
+spring:
+  profiles: prod
+
+hazelcast:
+  discovery:
+    type: KUBERNETES
+    kubernetes:
+      enabled: true
+      namespace: production
+      service-name: hazelcast-cluster
+      resolve-not-ready-addresses: true
+
+5. Kubernetes 服务配置
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: hazelcast-cluster
+  namespace: production
+spec:
+  selector:
+    app: my-app
+  ports:
+  - name: hazelcast
+    port: 5701
+  clusterIP: None
+
+6. 高级配置：同时支持多种发现机制
+
+private void configureHybridDiscovery(JoinConfig joinConfig) {
+    HazelcastDiscoveryProperties.MulticastProperties multicast = discoveryProperties.getMulticast();
+    HazelcastDiscoveryProperties.KubernetesProperties kubernetes = discoveryProperties.getKubernetes();
+    
+    // 同时启用两种发现机制
+    if (multicast.isEnabled()) {
+        joinConfig.getMulticastConfig()
+            .setEnabled(true)
+            .setMulticastGroup(multicast.getGroup())
+            .setMulticastPort(multicast.getPort());
+    }
+    
+    if (kubernetes.isEnabled()) {
+        joinConfig.getKubernetesConfig()
+            .setEnabled(true)
+            .setProperty("namespace", kubernetes.getNamespace())
+            .setProperty("service-name", kubernetes.getServiceName())
+            .setProperty("resolve-not-ready-addresses", String.valueOf(kubernetes.isResolveNotReadyAddresses()));
+    }
+    
+    // 如果两者都禁用，则使用默认的TCP/IP配置
+    if (!multicast.isEnabled() && !kubernetes.isEnabled()) {
+        joinConfig.getTcpIpConfig().setEnabled(true).addMember("localhost");
+    }
+}
+
+7. 使用环境变量覆盖配置
+
+在 Kubernetes 部署中，可以使用环境变量覆盖配置：
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: my-app
+spec:
+  template:
+    spec:
+      containers:
+      - name: app
+        image: my-app:latest
+        env:
+        - name: SPRING_PROFILES_ACTIVE
+          value: prod
+        - name: HAZELCAST_DISCOVERY_TYPE
+          value: KUBERNETES
+        - name: HAZELCAST_DISCOVERY_KUBERNETES_SERVICE_NAME
+          value: hazelcast-cluster
+        - name: HAZELCAST_DISCOVERY_KUBERNETES_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+
+8. 配置验证和日志
+
+添加配置验证和日志输出：
+
+@Bean
+public Config hazelcastConfig() {
+    Config config = new Config();
+    
+    // ... 其他配置
+    
+    // 记录使用的发现机制
+    String discoveryType = discoveryProperties.getType().name();
+    logger.info("Using Hazelcast discovery type: {}", discoveryType);
+    
+    if (discoveryType.equals("KUBERNETES")) {
+        KubernetesProperties k8s = discoveryProperties.getKubernetes();
+        if (k8s.getNamespace() == null || k8s.getNamespace().isEmpty()) {
+            logger.warn("Kubernetes namespace is not set, using default namespace");
+        }
+        if (k8s.getServiceName() == null || k8s.getServiceName().isEmpty()) {
+            throw new IllegalStateException("Kubernetes service name must be set for Kubernetes discovery");
+        }
+    }
+    
+    return config;
+}
+
+9. 完整的属性配置参考
+
+在 
+"src/main/resources/META-INF/additional-spring-configuration-metadata.json" 中添加：
+
+{
+  "properties": [
+    {
+      "name": "hazelcast.discovery.type",
+      "type": "com.example.config.HazelcastDiscoveryProperties$DiscoveryType",
+      "description": "Hazelcast discovery mechanism type",
+      "defaultValue": "KUBERNETES"
+    },
+    {
+      "name": "hazelcast.discovery.multicast.enabled",
+      "type": "java.lang.Boolean",
+      "description": "Enable multicast discovery",
+      "defaultValue": false
+    },
+    {
+      "name": "hazelcast.discovery.multicast.group",
+      "type": "java.lang.String",
+      "description": "Multicast group address",
+      "defaultValue": "224.2.2.3"
+    },
+    {
+      "name": "hazelcast.discovery.multicast.port",
+      "type": "java.lang.Integer",
+      "description": "Multicast port",
+      "defaultValue": 54327
+    },
+    {
+      "name": "hazelcast.discovery.kubernetes.enabled",
+      "type": "java.lang.Boolean",
+      "description": "Enable Kubernetes discovery",
+      "defaultValue": true
+    },
+    {
+      "name": "hazelcast.discovery.kubernetes.namespace",
+      "type": "java.lang.String",
+      "description": "Kubernetes namespace",
+      "defaultValue": "default"
+    },
+    {
+      "name": "hazelcast.discovery.kubernetes.service-name",
+      "type": "java.lang.String",
+      "description": "Kubernetes service name for discovery",
+      "defaultValue": "hazelcast-service"
+    },
+    {
+      "name": "hazelcast.discovery.kubernetes.resolve-not-ready-addresses",
+      "type": "java.lang.Boolean",
+      "description": "Resolve not-ready addresses",
+      "defaultValue": true
+    }
+  ]
+}
+
+10. 测试不同配置
+
+测试 Kubernetes 配置
+
+@SpringBootTest
+@ActiveProfiles("prod")
+public class KubernetesDiscoveryTest {
+
+    @Autowired
+    private HazelcastInstance hazelcastInstance;
+
+    @Test
+    public void testKubernetesDiscovery() {
+        Cluster cluster = hazelcastInstance.getCluster();
+        assertThat(cluster.getMembers()).isNotEmpty();
+        
+        // 验证 Kubernetes 配置
+        Config config = hazelcastInstance.getConfig();
+        KubernetesConfig kubernetesConfig = config.getNetworkConfig().getJoin().getKubernetesConfig();
+        
+        assertThat(kubernetesConfig.isEnabled()).isTrue();
+        assertThat(kubernetesConfig.getProperty("service-name")).isEqualTo("hazelcast-cluster");
+    }
+}
+
+测试 Multicast 配置
+
+@SpringBootTest
+@ActiveProfiles("dev")
+public class MulticastDiscoveryTest {
+
+    @Autowired
+    private HazelcastInstance hazelcastInstance;
+
+    @Test
+    public void testMulticastDiscovery() {
+        Cluster cluster = hazelcastInstance.getCluster();
+        assertThat(cluster.getMembers()).isNotEmpty();
+        
+        // 验证 Multicast 配置
+        Config config = hazelcastInstance.getConfig();
+        MulticastConfig multicastConfig = config.getNetworkConfig().getJoin().getMulticastConfig();
+        
+        assertThat(multicastConfig.isEnabled()).isTrue();
+        assertThat(multicastConfig.getMulticastGroup()).isEqualTo("224.2.2.3");
+    }
+}
+
+11. GKE 特定配置建议
+
+在 GKE 环境中，建议添加以下优化配置：
+
+private void configureKubernetes(JoinConfig joinConfig) {
+    HazelcastDiscoveryProperties.KubernetesProperties kubernetes = discoveryProperties.getKubernetes();
+    
+    joinConfig.getKubernetesConfig()
+        .setEnabled(true)
+        .setProperty("namespace", kubernetes.getNamespace())
+        .setProperty("service-name", kubernetes.getServiceName())
+        .setProperty("resolve-not-ready-addresses", String.valueOf(kubernetes.isResolveNotReadyAddresses()))
+        
+        // GKE 特定优化
+        .setProperty("use-node-name-as-external-address", "true")
+        .setProperty("service-label-name", "app")
+        .setProperty("service-label-value", "hazelcast")
+        .setProperty("pod-label-name", "app")
+        .setProperty("pod-label-value", "hazelcast");
+}
+
+12. 安全配置
+
+对于生产环境，添加安全配置：
+
+@Bean
+public Config hazelcastConfig() {
+    Config config = new Config();
+    
+    // ... 发现配置
+    
+    // 安全配置
+    config.getSecurityConfig().setEnabled(true);
+    config.setLicenseKey("YOUR_LICENSE_KEY");
+    
+    // 启用TLS
+    SSLConfig sslConfig = new SSLConfig()
+        .setEnabled(true)
+        .setFactoryClassName("com.hazelcast.nio.ssl.BasicSSLContextFactory")
+        .setProperty("keyStore", "/path/to/keystore")
+        .setProperty("keyStorePassword", "password")
+        .setProperty("trustStore", "/path/to/truststore")
+        .setProperty("trustStorePassword", "password");
+    
+    config.getNetworkConfig().setSSLConfig(sslConfig);
+    
+    return config;
+}
+
+总结
+
+通过这种配置方式，您可以：
+
+1. 灵活切换发现机制：通过配置文件在 Multicast 和 Kubernetes 之间切换
+2. 环境适配：使用 Spring Profile 适配不同环境
+3. 动态配置：在运行时根据环境变量调整配置
+4. 混合模式：支持同时启用多种发现机制
+5. GKE 优化：针对 GKE 环境提供特定优化配置
+6. 安全加固：添加 TLS 和安全配置
+
+在 GKE 环境中，推荐使用 Kubernetes 服务发现机制，因为它：
+
+- 自动处理 Pod IP 变化
+- 支持服务发现
+- 与 Kubernetes 服务网格集成更好
+- 提供更稳定的集群发现
+
+对于本地开发环境，Multicast 是更简单直接的选择。这种配置方案让您可以根据环境无缝切换，无需修改代码。
+
+
 package com.example.lock;
 
 import java.util.concurrent.TimeUnit;
