@@ -1656,3 +1656,70 @@ public class LockUtil {
 
 这个更新后的实现完全兼容 Hazelcast 5.5.0，并利用了新的 
 "FencedLock" API 提供的功能。
+
+
+
+
+
+import com.hazelcast.core.HazelcastInstance;
+import com.hazelcast.map.IMap;
+import org.springframework.stereotype.Component;
+
+import java.util.UUID;
+import java.util.concurrent.TimeUnit;
+
+@Component
+public class HazelcastAPLock implements APDistributedLock {
+
+    private final HazelcastInstance hazelcastInstance;
+    private final ThreadLocal<String> threadLockHolder = new ThreadLocal<>();
+    private static final String LOCK_MAP_NAME = "distributed_locks";
+
+    public HazelcastAPLock(HazelcastInstance hazelcastInstance) {
+        this.hazelcastInstance = hazelcastInstance;
+    }
+
+    private IMap<String, String> getLockMap() {
+        return hazelcastInstance.getMap(LOCK_MAP_NAME);
+    }
+
+    @Override
+    public boolean tryLock(String lockKey, long leaseTime) {
+        String lockId = UUID.randomUUID().toString();
+        boolean acquired = getLockMap().tryLock(lockKey, leaseTime, TimeUnit.MILLISECONDS);
+        if (acquired) {
+            threadLockHolder.set(lockId);
+            getLockMap().put(lockKey, lockId);
+        }
+        return acquired;
+    }
+
+    @Override
+    public void unlock(String lockKey) {
+        String currentLockId = threadLockHolder.get();
+        String lockIdInMap = getLockMap().get(lockKey);
+        
+        if (currentLockId != null && currentLockId.equals(lockIdInMap)) {
+            getLockMap().unlock(lockKey);
+            threadLockHolder.remove();
+        }
+    }
+
+    @Override
+    public boolean tryLock(String lockKey, long leaseTime, long waitTime) throws InterruptedException {
+        String lockId = UUID.randomUUID().toString();
+        boolean acquired = getLockMap().tryLock(lockKey, waitTime, TimeUnit.MILLISECONDS, leaseTime, TimeUnit.MILLISECONDS);
+        if (acquired) {
+            threadLockHolder.set(lockId);
+            getLockMap().put(lockKey, lockId);
+        }
+        return acquired;
+    }
+
+    @Override
+    public boolean isLocked(String lockKey) {
+        return getLockMap().isLocked(lockKey);
+    }
+}
+
+
