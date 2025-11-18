@@ -431,3 +431,51 @@ public class AppConfig {
 6. 优雅关闭: 支持应用平滑关闭
 
 这个实现可以处理超过60秒的长时任务，同时保证消息的可靠处理。
+
+
+
+
+@Configuration
+public class RestClientConfig {
+    
+    @Bean
+    public RestClient restClient() {
+        return RestClient.builder()
+            .baseUrl("http://target-service:8080")
+            .requestInterceptor((request, body, execution) -> {
+                // 添加追踪头
+                request.getHeaders().add("X-Request-ID", UUID.randomUUID().toString());
+                return execution.execute(request, body);
+            })
+            .requestFactory(optimizedRequestFactory())
+            .build();
+    }
+    
+    @Bean
+    public ClientHttpRequestFactory optimizedRequestFactory() {
+        HttpComponentsClientHttpRequestFactory factory = 
+            new HttpComponentsClientHttpRequestFactory();
+        factory.setConnectTimeout(5000);
+        factory.setReadTimeout(5000);
+        
+        // 连接池配置
+        PoolingHttpClientConnectionManager connectionManager = 
+            new PoolingHttpClientConnectionManager();
+        connectionManager.setMaxTotal(50);
+        connectionManager.setDefaultMaxPerRoute(20);
+        connectionManager.setValidateAfterInactivity(2000);
+        
+        CloseableHttpClient httpClient = HttpClients.custom()
+            .setConnectionManager(connectionManager)
+            .setKeepAliveStrategy((response, context) -> 30 * 1000) // 30秒保活
+            .evictExpiredConnections()
+            .evictIdleConnections(30, TimeUnit.SECONDS)
+            .build();
+            
+        factory.setHttpClient(httpClient);
+        return factory;
+    }
+}
+
+
+
