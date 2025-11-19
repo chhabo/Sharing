@@ -1,0 +1,73 @@
+import org.apache.hc.client5.http.classic.HttpClient;
+import org.apache.hc.client5.http.config.RequestConfig;
+import org.apache.hc.client5.http.impl.classic.CloseableHttpClient;
+import org.apache.hc.client5.http.impl.classic.HttpClients;
+import org.apache.hc.client5.http.impl.io.PoolingHttpClientConnectionManager;
+import org.apache.hc.core5.util.Timeout;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.http.client.ClientHttpRequestFactory;
+import org.springframework.http.client.HttpComponentsClientHttpRequestFactory;
+import org.springframework.web.client.RestClient;
+
+import java.util.concurrent.TimeUnit;
+
+@Configuration
+public class GkeOptimizedRestClientConfig {
+
+    @Value("${rest.client.connect-timeout:2000}")
+    private int connectTimeout;
+    
+    @Value("${rest.client.socket-timeout:5000}")
+    private int socketTimeout;
+    
+    @Value("${rest.client.connection-request-timeout:1000}")
+    private int connectionRequestTimeout;
+
+    @Bean
+    public RestClient restClient() {
+        return RestClient.builder()
+                .requestFactory(gkeOptimizedRequestFactory())
+                // 添加自定义拦截器用于日志记录
+                .requestInterceptor((request, body, execution) -> {
+                    long startTime = System.currentTimeMillis();
+                    try {
+                        return execution.execute(request, body);
+                    } finally {
+                        long duration = System.currentTimeMillis() - startTime;
+                        if (duration > 1000) { // 记录慢请求
+                            System.out.printf("Slow HTTP request: %s %s took %dms%n", 
+                                request.getMethod(), request.getURI(), duration);
+                        }
+                    }
+                })
+                .build();
+    }
+
+    @Bean
+    public ClientHttpRequestFactory gkeOptimizedRequestFactory() {
+        PoolingHttpClientConnectionManager connectionManager = 
+            new PoolingHttpClientConnectionManager();
+        
+        // GKE优化配置
+        connectionManager.setMaxTotal(50);  // 适当调小，避免资源浪费
+        connectionManager.setDefaultMaxPerRoute(10);
+        connectionManager.setValidateAfterInactivity(Timeout.of(2, TimeUnit.SECONDS));
+
+        RequestConfig requestConfig = RequestConfig.custom()
+                .setConnectTimeout(Timeout.of(connectTimeout, TimeUnit.MILLISECONDS))
+                .setResponseTimeout(Timeout.of(socketTimeout, TimeUnit.MILLISECONDS))
+                .setConnectionRequestTimeout(Timeout.of(connectionRequestTimeout, TimeUnit.MILLISECONDS))
+                .build();
+
+        CloseableHttpClient httpClient = HttpClients.custom()
+                .setConnectionManager(connectionManager)
+                .setDefaultRequestConfig(requestConfig)
+                .setKeepAliveStrategy((response, context) -> 45 * 1000) // 45秒
+                .evictIdleConnections(30, TimeUnit.SECONDS)
+                .build();
+
+        return new HttpComponentsClientHttpRequestFactory(httpClient);
+    }
+}
