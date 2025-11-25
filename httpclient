@@ -1,208 +1,280 @@
-你说得对！
-"OkHttp3ClientHttpRequestFactory" 在较新的 Spring 版本中确实被标记为过时了。让我提供更新的、正确的配置方式：
+好的，我来详细说明如何将 Apache HttpClient 5.x 集成到 Spring RestClient 中。HttpClient 5.x 是 Spring 6.x 推荐的 HTTP 客户端。
 
-1. 正确的配置方式：使用 
-"ClientHttpRequestFactory"
+1. 添加 HttpClient 5.x 依赖
 
-在 Spring 6.x 中，推荐使用更通用的方式来配置：
+首先需要添加 HttpClient 5.x 的依赖：
 
-import org.springframework.http.client.ClientHttpRequestFactory;
-import org.springframework.http.client.OkHttp3ClientHttpRequestFactory;
+Maven
 
-@Configuration
-public class OkHttpRestClientConfig {
-    
-    @Bean
-    public OkHttpClient okHttpClient() {
-        return new OkHttpClient.Builder()
-            .connectTimeout(Duration.ofSeconds(10))
-            .readTimeout(Duration.ofSeconds(30))
-            .writeTimeout(Duration.ofSeconds(30))
-            .build();
-    }
-    
-    @Bean
-    public ClientHttpRequestFactory clientHttpRequestFactory(OkHttpClient okHttpClient) {
-        // 虽然过时，但这是目前的方式
-        return new OkHttp3ClientHttpRequestFactory(okHttpClient);
-    }
-    
-    @Bean
-    public RestClient restClient(ClientHttpRequestFactory requestFactory) {
-        return RestClient.builder()
-            .requestFactory(requestFactory)
-            .build();
-    }
-}
+<dependency>
+    <groupId>org.apache.httpcomponents.client5</groupId>
+    <artifactId>httpclient5</artifactId>
+    <version>5.2.1</version>
+</dependency>
 
-2. 替代方案：使用 
-"RestClient.create()" 的便捷方式
+<!-- 可选：HTTP/2 支持 -->
+<dependency>
+    <groupId>org.apache.httpcomponents.core5</groupId>
+    <artifactId>httpcore5-h2</artifactId>
+    <version>5.2.1</version>
+</dependency>
+
+Gradle
+
+implementation 'org.apache.httpcomponents.client5:httpclient5:5.2.1'
+implementation 'org.apache.httpcomponents.core5:httpcore5-h2:5.2.1' // 可选，HTTP/2支持
+
+2. 基础配置：创建 HttpClient 5.x 的 RestClient
+
+import org.apache.hc.client5.http.classic.HttpClient;
+import org.apache.hc.client5.http.impl.classic.CloseableHttpClient;
+import org.apache.hc.client5.http.impl.classic.HttpClients;
+import org.apache.hc.client5.http.impl.io.PoolingHttpClientConnectionManager;
+import org.apache.hc.client5.http.impl.io.PoolingHttpClientConnectionManagerBuilder;
+import org.apache.hc.client5.http.ssl.SSLConnectionSocketFactory;
+import org.apache.hc.core5.http.io.SocketConfig;
+import org.apache.hc.core5.util.Timeout;
+import org.springframework.http.client.HttpComponentsClientHttpRequestFactory;
 
 @Configuration
-public class SimpleOkHttpConfig {
-    
+public class HttpClient5Config {
+
     @Bean
-    public RestClient restClient() {
-        OkHttpClient okHttpClient = new OkHttpClient.Builder()
-            .connectTimeout(Duration.ofSeconds(10))
-            .readTimeout(Duration.ofSeconds(30))
-            .build();
-        
-        // 使用过时的工厂类，但这是当前的标准做法
-        ClientHttpRequestFactory requestFactory = new OkHttp3ClientHttpRequestFactory(okHttpClient);
-        
-        return RestClient.builder()
-            .requestFactory(requestFactory)
-            .build();
-    }
-}
-
-3. 更现代的替代方案：使用 JDK 的 HttpClient（推荐）
-
-既然 
-"OkHttp3ClientHttpRequestFactory" 过时了，考虑使用 JDK 11+ 内置的 HttpClient：
-
-import java.net.http.HttpClient;
-import org.springframework.http.client.JdkClientHttpRequestFactory;
-
-@Configuration
-public class JdkHttpClientConfig {
-    
-    @Bean
-    public RestClient restClient() {
-        HttpClient httpClient = HttpClient.newBuilder()
-            .connectTimeout(Duration.ofSeconds(10))
-            .version(HttpClient.Version.HTTP_2)
-            .build();
-        
-        JdkClientHttpRequestFactory requestFactory = new JdkClientHttpRequestFactory(httpClient);
-        
-        return RestClient.builder()
-            .requestFactory(requestFactory)
-            .build();
-    }
-}
-
-4. 如果必须使用 OkHttp，这里是当前的最佳实践
-
-@Configuration
-public class CurrentOkHttpBestPractice {
-    
-    @Bean
-    @Primary
-    public RestClient restClient() {
-        OkHttpClient okHttpClient = createOkHttpClient();
-        
-        // 虽然过时，但目前没有官方替代方案
-        @SuppressWarnings("deprecation")
-        ClientHttpRequestFactory requestFactory = new OkHttp3ClientHttpRequestFactory(okHttpClient);
-        
-        return RestClient.builder()
-            .requestFactory(requestFactory)
-            .baseUrl("https://api.example.com")
-            .defaultHeader("User-Agent", "MyApp/1.0")
-            .build();
-    }
-    
-    private OkHttpClient createOkHttpClient() {
-        return new OkHttpClient.Builder()
-            .connectTimeout(Duration.ofSeconds(15))
-            .readTimeout(Duration.ofSeconds(30))
-            .writeTimeout(Duration.ofSeconds(30))
-            .callTimeout(Duration.ofMinutes(2))
-            .addInterceptor(createLoggingInterceptor())
-            .addInterceptor(createUserAgentInterceptor())
-            .connectionPool(new ConnectionPool(50, 5, TimeUnit.MINUTES))
-            .build();
-    }
-    
-    private Interceptor createLoggingInterceptor() {
-        HttpLoggingInterceptor logging = new HttpLoggingInterceptor();
-        logging.setLevel(HttpLoggingInterceptor.Level.BASIC);
-        return logging;
-    }
-    
-    private Interceptor createUserAgentInterceptor() {
-        return chain -> {
-            okhttp3.Request originalRequest = chain.request();
-            okhttp3.Request requestWithUserAgent = originalRequest.newBuilder()
-                .header("User-Agent", "MyApp/1.0 (OkHttp)")
+    public CloseableHttpClient httpClient5() {
+        // 创建连接池管理器
+        PoolingHttpClientConnectionManager connectionManager = 
+            PoolingHttpClientConnectionManagerBuilder.create()
+                .setMaxConnTotal(100)          // 最大连接数
+                .setMaxConnPerRoute(20)        // 每个路由的最大连接数
+                .setDefaultSocketConfig(
+                    SocketConfig.custom()
+                        .setSoTimeout(Timeout.ofSeconds(30))
+                        .build()
+                )
                 .build();
-            return chain.proceed(requestWithUserAgent);
-        };
+
+        return HttpClients.custom()
+            .setConnectionManager(connectionManager)
+            .evictExpiredConnections()         // 驱逐过期连接
+            .evictIdleConnections(Timeout.ofMinutes(1)) // 驱逐空闲连接
+            .setConnectionManagerShared(false)  // 不共享连接管理器
+            .build();
+    }
+
+    @Bean
+    public HttpComponentsClientHttpRequestFactory clientHttpRequestFactory(
+            CloseableHttpClient httpClient5) {
+        return new HttpComponentsClientHttpRequestFactory(httpClient5);
+    }
+
+    @Bean
+    public RestClient restClient(HttpComponentsClientHttpRequestFactory requestFactory) {
+        return RestClient.builder()
+            .requestFactory(requestFactory)
+            .baseUrl("https://api.example.com") // 可选：设置基础URL
+            .build();
     }
 }
 
-5. 针对 muServer2 兼容性的更新配置
+3. 高级配置：包含超时、重试等完整配置
+
+import org.apache.hc.client5.http.config.RequestConfig;
+import org.apache.hc.client5.http.impl.DefaultHttpRequestRetryStrategy;
+import org.apache.hc.client5.http.protocol.HttpClientContext;
+import org.apache.hc.core5.http.HttpRequest;
+import org.apache.hc.core5.http.protocol.HttpContext;
+import org.apache.hc.core5.util.TimeValue;
 
 @Configuration
-public class MuServerCompatibleConfig {
-    
+public class AdvancedHttpClient5Config {
+
+    @Bean
+    public CloseableHttpClient advancedHttpClient5() {
+        // 连接池配置
+        PoolingHttpClientConnectionManager connectionManager = 
+            PoolingHttpClientConnectionManagerBuilder.create()
+                .setMaxConnTotal(200)
+                .setMaxConnPerRoute(50)
+                .setDefaultSocketConfig(
+                    SocketConfig.custom()
+                        .setSoTimeout(Timeout.ofSeconds(30))
+                        .setTcpNoDelay(true)
+                        .build()
+                )
+                .build();
+
+        // 请求配置
+        RequestConfig requestConfig = RequestConfig.custom()
+            .setConnectionRequestTimeout(Timeout.ofSeconds(5))   // 连接请求超时
+            .setConnectTimeout(Timeout.ofSeconds(10))           // 连接超时
+            .setResponseTimeout(Timeout.ofSeconds(30))          // 响应超时
+            .setContentCompressionEnabled(true)                 // 启用内容压缩
+            .setRedirectsEnabled(true)                          // 启用重定向
+            .build();
+
+        return HttpClients.custom()
+            .setConnectionManager(connectionManager)
+            .setDefaultRequestConfig(requestConfig)
+            .setRetryStrategy(new CustomRetryStrategy())        // 自定义重试策略
+            .evictExpiredConnections()
+            .evictIdleConnections(Timeout.ofSeconds(30))
+            .setConnectionManagerShared(false)
+            .setUserAgent("MyApp/1.0 (HttpClient5)")
+            .build();
+    }
+
+    /**
+     * 自定义重试策略
+     */
+    private static class CustomRetryStrategy extends DefaultHttpRequestRetryStrategy {
+        
+        public CustomRetryStrategy() {
+            super(3, TimeValue.ofSeconds(1)); // 最大重试3次，间隔1秒
+        }
+
+        @Override
+        public boolean retryRequest(HttpRequest request, 
+                                  IOException exception, 
+                                  int execCount, 
+                                  HttpContext context) {
+            // 只对幂等请求或GET请求重试
+            String method = request.getMethod();
+            if ("GET".equalsIgnoreCase(method) || 
+                "HEAD".equalsIgnoreCase(method) ||
+                isIdempotent(request)) {
+                return execCount <= 3; // 最多重试3次
+            }
+            return false;
+        }
+
+        private boolean isIdempotent(HttpRequest request) {
+            String method = request.getMethod();
+            return "GET".equalsIgnoreCase(method) || 
+                   "HEAD".equalsIgnoreCase(method) ||
+                   "PUT".equalsIgnoreCase(method) || 
+                   "DELETE".equalsIgnoreCase(method);
+        }
+    }
+
+    @Bean
+    public RestClient restClientWithAdvancedConfig() {
+        CloseableHttpClient httpClient = advancedHttpClient5();
+        HttpComponentsClientHttpRequestFactory requestFactory = 
+            new HttpComponentsClientHttpRequestFactory(httpClient);
+
+        return RestClient.builder()
+            .requestFactory(requestFactory)
+            .defaultHeader("Accept", "application/json")
+            .defaultHeader("User-Agent", "MyApp-HttpClient5/1.0")
+            .build();
+    }
+}
+
+4. HTTP/2 支持配置
+
+@Configuration
+public class HttpClient5Http2Config {
+
+    @Bean
+    @Qualifier("http2RestClient")
+    public RestClient http2RestClient() {
+        CloseableHttpClient httpClient = createHttp2Client();
+        HttpComponentsClientHttpRequestFactory requestFactory = 
+            new HttpComponentsClientHttpRequestFactory(httpClient);
+
+        return RestClient.builder()
+            .requestFactory(requestFactory)
+            .build();
+    }
+
+    private CloseableHttpClient createHttp2Client() {
+        try {
+            // HTTP/2 配置
+            return HttpClients.custom()
+                .setProtocolNegotiationEnabled(true)  // 启用协议协商
+                .setDefaultRequestConfig(
+                    RequestConfig.custom()
+                        .setConnectTimeout(Timeout.ofSeconds(10))
+                        .setResponseTimeout(Timeout.ofSeconds(30))
+                        .build()
+                )
+                // 优先使用 HTTP/2，回退到 HTTP/1.1
+                .setVersionPolicy(HttpVersionPolicy.NEGOTIATE)
+                .build();
+                
+        } catch (Exception e) {
+            // 如果 HTTP/2 配置失败，回退到普通客户端
+            return HttpClients.createDefault();
+        }
+    }
+}
+
+5. 针对 muServer2 兼容性的专用配置（禁用分块传输）
+
+@Configuration
+public class MuServerHttpClient5Config {
+
+    @Bean
+    @Qualifier("muServerHttpClient5")
+    public CloseableHttpClient muServerHttpClient5() {
+        PoolingHttpClientConnectionManager connectionManager = 
+            PoolingHttpClientConnectionManagerBuilder.create()
+                .setMaxConnTotal(50)
+                .setMaxConnPerRoute(10)
+                .build();
+
+        RequestConfig requestConfig = RequestConfig.custom()
+            .setConnectionRequestTimeout(Timeout.ofSeconds(5))
+            .setConnectTimeout(Timeout.ofSeconds(10))
+            .setResponseTimeout(Timeout.ofSeconds(30))
+            .setExpectContinueEnabled(false)  // 关键：禁用 Expect: 100-Continue
+            .build();
+
+        return HttpClients.custom()
+            .setConnectionManager(connectionManager)
+            .setDefaultRequestConfig(requestConfig)
+            .disableContentCompression()  // 禁用压缩，避免分块
+            .disableAuthCaching()         // 禁用认证缓存
+            .disableCookieManagement()    // 禁用Cookie管理（如果需要）
+            .setUserAgent("MuServer2-Client/1.0")
+            .addRequestInterceptorFirst(new RemoveChunkedHeaderInterceptor())
+            .build();
+    }
+
+    /**
+     * 拦截器：移除分块传输头
+     */
+    private static class RemoveChunkedHeaderInterceptor implements HttpRequestInterceptor {
+        @Override
+        public void process(HttpRequest request, EntityDetails entity, HttpContext context) {
+            // 移除 Transfer-Encoding 头，强制使用 Content-Length
+            request.removeHeaders("Transfer-Encoding");
+            request.removeHeaders("TE");
+            
+            // 如果有实体，确保设置正确的 Content-Length
+            if (entity != null && entity.getContentLength() > 0) {
+                request.setHeader("Content-Length", Long.toString(entity.getContentLength()));
+            }
+        }
+    }
+
     @Bean
     @Qualifier("muServerRestClient")
-    public RestClient muServerRestClient() {
-        OkHttpClient okHttpClient = createMuServerCompatibleOkHttpClient();
+    public RestClient muServerRestClient(
+            @Qualifier("muServerHttpClient5") CloseableHttpClient httpClient) {
         
-        // 使用过时的工厂，但添加抑制警告注解
-        @SuppressWarnings("deprecation")
-        ClientHttpRequestFactory requestFactory = new OkHttp3ClientHttpRequestFactory(okHttpClient);
-        
+        HttpComponentsClientHttpRequestFactory requestFactory = 
+            new HttpComponentsClientHttpRequestFactory(httpClient);
+
         return RestClient.builder()
             .requestFactory(requestFactory)
             .baseUrl("你的muServer2地址")
             .defaultHeader("Content-Type", "application/json; charset=UTF-8")
+            .defaultHeader("Accept", "application/json")
             .requestInterceptor(new MuServerRequestInterceptor())
             .build();
     }
-    
-    private OkHttpClient createMuServerCompatibleOkHttpClient() {
-        return new OkHttpClient.Builder()
-            .connectTimeout(Duration.ofSeconds(10))
-            .readTimeout(Duration.ofSeconds(30))
-            .addInterceptor(new NoChunkingInterceptor())
-            .addInterceptor(new ContentLengthVerifierInterceptor())
-            .build();
-    }
-    
-    /**
-     * 确保不使用分块传输的拦截器
-     */
-    private static class NoChunkingInterceptor implements Interceptor {
-        @Override
-        public Response intercept(Chain chain) throws IOException {
-            Request originalRequest = chain.request();
-            
-            // 复制请求并移除分块相关头信息
-            Request newRequest = originalRequest.newBuilder()
-                .removeHeader("Transfer-Encoding")
-                .removeHeader("TE")
-                .build();
-            
-            return chain.proceed(newRequest);
-        }
-    }
-    
-    /**
-     * 验证内容长度的拦截器
-     */
-    private static class ContentLengthVerifierInterceptor implements Interceptor {
-        @Override
-        public Response intercept(Chain chain) throws IOException {
-            Request request = chain.request();
-            RequestBody body = request.body();
-            
-            if (body != null) {
-                long contentLength = body.contentLength();
-                if (contentLength >= 0) {
-                    // 如果知道内容长度，记录日志
-                    System.out.println("请求内容长度: " + contentLength + " bytes");
-                }
-            }
-            
-            return chain.proceed(request);
-        }
-    }
-    
+
     /**
      * RestClient 请求拦截器
      */
@@ -210,102 +282,269 @@ public class MuServerCompatibleConfig {
         @Override
         public ClientHttpResponse intercept(HttpRequest request, byte[] body, 
                                           ClientHttpRequestExecution execution) throws IOException {
-            // 确保设置正确的头信息
+            
+            System.out.println("=== MuServer2 请求调试 ===");
+            System.out.println("URL: " + request.getURI());
+            System.out.println("Method: " + request.getMethod());
+            System.out.println("Headers: " + request.getHeaders());
+
+            // 确保不使用分块传输
             if (body != null && body.length > 0) {
                 request.getHeaders().setContentLength(body.length);
                 request.getHeaders().remove("Transfer-Encoding");
+                System.out.println("Body长度: " + body.length + " bytes");
             }
+
+            ClientHttpResponse response = execution.execute(request, body);
             
-            return execution.execute(request, body);
+            System.out.println("响应状态: " + response.getStatusCode());
+            System.out.println("响应头: " + response.getHeaders());
+            System.out.println("=== 请求结束 ===");
+
+            return response;
         }
     }
 }
 
-6. 工厂类封装（避免重复的抑制警告）
-
-@Component
-public class OkHttpRequestFactoryFactory {
-    
-    /**
-     * 创建 OkHttp 请求工厂的封装方法
-     */
-    public ClientHttpRequestFactory createRequestFactory(OkHttpClient okHttpClient) {
-        // 虽然过时，但封装起来避免重复的 @SuppressWarnings
-        return new OkHttp3ClientHttpRequestFactory(okHttpClient);
-    }
-}
+6. SSL/TLS 安全配置
 
 @Configuration
-public class CleanOkHttpConfig {
-    
-    @Autowired
-    private OkHttpRequestFactoryFactory factoryFactory;
-    
+public class SecureHttpClient5Config {
+
     @Bean
-    public RestClient restClient() {
-        OkHttpClient okHttpClient = new OkHttpClient.Builder()
-            .connectTimeout(Duration.ofSeconds(10))
-            .readTimeout(Duration.ofSeconds(30))
+    public CloseableHttpClient secureHttpClient5() throws Exception {
+        SSLContext sslContext = SSLContexts.custom()
+            .loadTrustMaterial((chain, authType) -> true)  // 信任所有证书（仅测试环境）
             .build();
-        
-        // 使用封装的工厂创建方法
-        ClientHttpRequestFactory requestFactory = factoryFactory.createRequestFactory(okHttpClient);
-        
-        return RestClient.builder()
-            .requestFactory(requestFactory)
-            .build();
-    }
-}
 
-7. 迁移到 Spring 推荐的 HttpClient
+        SSLConnectionSocketFactory sslSocketFactory = new SSLConnectionSocketFactory(
+            sslContext,
+            new String[]{"TLSv1.2", "TLSv1.3"},  // 支持的协议
+            null,                                 // 支持的密码套件（null表示默认）
+            SSLConnectionSocketFactory.getDefaultHostnameVerifier()
+        );
 
-考虑到 
-"OkHttp3ClientHttpRequestFactory" 已过时，建议迁移：
-
-@Configuration
-public class HttpClientMigrationConfig {
-    
-    @Bean
-    @Primary
-    public RestClient httpClientRestClient() {
-        // 使用 Apache HttpClient 5.x（推荐替代方案）
-        org.apache.hc.client5.http.impl.classic.CloseableHttpClient httpClient = 
-            org.apache.hc.client5.http.impl.classic.HttpClients.custom()
-                .setConnectionTimeToLive(5, TimeUnit.MINUTES)
+        PoolingHttpClientConnectionManager connectionManager = 
+            PoolingHttpClientConnectionManagerBuilder.create()
+                .setSSLSocketFactory(sslSocketFactory)
+                .setMaxConnTotal(100)
+                .setMaxConnPerRoute(20)
                 .build();
-        
+
+        RequestConfig requestConfig = RequestConfig.custom()
+            .setConnectTimeout(Timeout.ofSeconds(15))
+            .setResponseTimeout(Timeout.ofSeconds(30))
+            .build();
+
+        return HttpClients.custom()
+            .setConnectionManager(connectionManager)
+            .setDefaultRequestConfig(requestConfig)
+            .setSSLContext(sslContext)
+            .build();
+    }
+
+    @Bean
+    public RestClient secureRestClient() throws Exception {
+        CloseableHttpClient httpClient = secureHttpClient5();
         HttpComponentsClientHttpRequestFactory requestFactory = 
             new HttpComponentsClientHttpRequestFactory(httpClient);
-        
-        return RestClient.builder()
-            .requestFactory(requestFactory)
-            .build();
-    }
-    
-    @Bean
-    @Qualifier("jdkHttpClient")
-    public RestClient jdkHttpClientRestClient() {
-        // 使用 JDK 内置的 HttpClient（最现代的方案）
-        HttpClient httpClient = HttpClient.newBuilder()
-            .connectTimeout(Duration.ofSeconds(10))
-            .version(HttpClient.Version.HTTP_2)
-            .build();
-        
-        JdkClientHttpRequestFactory requestFactory = new JdkClientHttpRequestFactory(httpClient);
-        
+
         return RestClient.builder()
             .requestFactory(requestFactory)
             .build();
     }
 }
 
-总结
+7. 完整的服务类示例
 
-1. 
-"OkHttp3ClientHttpRequestFactory" 确实已过时，但目前在 Spring 6.x 中仍然可用
-2. 推荐迁移到其他 HttpClient 实现，如 JDK 的 HttpClient 或 Apache HttpClient 5.x
-3. 如果必须使用 OkHttp，可以使用 
-"@SuppressWarnings("deprecation")" 或封装工厂方法
-4. 对于新项目，建议直接使用 JDK 的 HttpClient，它是未来的方向
+@Service
+public class MuServerService {
 
-对于你的 muServer2 项目，我建议考虑迁移到 JDK 的 HttpClient，这样可以避免过时 API 的问题，同时获得更好的 HTTP/2 支持。
+    private final RestClient muServerRestClient;
+    private final ObjectMapper objectMapper;
+
+    public MuServerService(@Qualifier("muServerRestClient") RestClient muServerRestClient) {
+        this.muServerRestClient = muServerRestClient;
+        this.objectMapper = new ObjectMapper();
+        this.objectMapper.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+    }
+
+    /**
+     * 发送用户数据到 muServer2
+     */
+    public String createUser(User user) {
+        try {
+            // 方法1：直接发送对象（让RestClient处理序列化）
+            return muServerRestClient.post()
+                .uri("/api/users")
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(user)
+                .retrieve()
+                .body(String.class);
+
+        } catch (Exception e) {
+            // 方法2：手动控制序列化（更可靠）
+            return createUserWithManualControl(user);
+        }
+    }
+
+    private String createUserWithManualControl(User user) {
+        try {
+            // 手动序列化以确保精确控制
+            String jsonBody = objectMapper.writeValueAsString(user);
+            byte[] jsonBytes = jsonBody.getBytes(StandardCharsets.UTF_8);
+
+            return muServerRestClient.post()
+                .uri("/api/users")
+                .contentType(MediaType.APPLICATION_JSON)
+                .header("Content-Length", String.valueOf(jsonBytes.length))
+                .body(jsonBody)
+                .retrieve()
+                .onStatus(HttpStatusCode::isError, (request, response) -> {
+                    throw new RuntimeException("HTTP错误: " + response.getStatusCode());
+                })
+                .body(String.class);
+
+        } catch (Exception e) {
+            throw new RuntimeException("创建用户失败", e);
+        }
+    }
+
+    /**
+     * 获取用户信息
+     */
+    public User getUser(Long id) {
+        return muServerRestClient.get()
+            .uri("/api/users/{id}", id)
+            .retrieve()
+            .body(User.class);
+    }
+
+    /**
+     * 批量操作示例
+     */
+    public List<User> batchCreateUsers(List<User> users) {
+        return users.stream()
+            .map(this::createUserAndParse)
+            .collect(Collectors.toList());
+    }
+
+    private User createUserAndParse(User user) {
+        try {
+            String response = createUser(user);
+            return objectMapper.readValue(response, User.class);
+        } catch (Exception e) {
+            throw new RuntimeException("批量创建用户失败", e);
+        }
+    }
+}
+
+8. 配置属性化（使用application.yml）
+
+# application.yml
+http:
+  client:
+    max-connections: 100
+    max-connections-per-route: 20
+    connect-timeout: 10s
+    response-timeout: 30s
+    socket-timeout: 30s
+
+mu-server:
+  base-url: "https://your-muserver2-domain.com"
+  api-key: "your-api-key"
+
+@Configuration
+@ConfigurationProperties(prefix = "http.client")
+@Data
+public class HttpClientProperties {
+    private int maxConnections = 100;
+    private int maxConnectionsPerRoute = 20;
+    private Duration connectTimeout = Duration.ofSeconds(10);
+    private Duration responseTimeout = Duration.ofSeconds(30);
+    private Duration socketTimeout = Duration.ofSeconds(30);
+}
+
+@Configuration
+@EnableConfigurationProperties({HttpClientProperties.class, MuServerProperties.class})
+public class PropertyBasedHttpClient5Config {
+
+    @Bean
+    public CloseableHttpClient configuredHttpClient5(HttpClientProperties properties) {
+        PoolingHttpClientConnectionManager connectionManager = 
+            PoolingHttpClientConnectionManagerBuilder.create()
+                .setMaxConnTotal(properties.getMaxConnections())
+                .setMaxConnPerRoute(properties.getMaxConnectionsPerRoute())
+                .setDefaultSocketConfig(
+                    SocketConfig.custom()
+                        .setSoTimeout(Timeout.of(properties.getSocketTimeout()))
+                        .build()
+                )
+                .build();
+
+        RequestConfig requestConfig = RequestConfig.custom()
+            .setConnectTimeout(Timeout.of(properties.getConnectTimeout()))
+            .setResponseTimeout(Timeout.of(properties.getResponseTimeout()))
+            .build();
+
+        return HttpClients.custom()
+            .setConnectionManager(connectionManager)
+            .setDefaultRequestConfig(requestConfig)
+            .build();
+    }
+
+    @Bean
+    public RestClient propertyBasedRestClient(CloseableHttpClient httpClient5, 
+                                             MuServerProperties muServerProperties) {
+        HttpComponentsClientHttpRequestFactory requestFactory = 
+            new HttpComponentsClientHttpRequestFactory(httpClient5);
+
+        return RestClient.builder()
+            .requestFactory(requestFactory)
+            .baseUrl(muServerProperties.getBaseUrl())
+            .defaultHeader("X-API-Key", muServerProperties.getApiKey())
+            .defaultHeader("Content-Type", "application/json")
+            .build();
+    }
+}
+
+9. 连接池监控和管理
+
+@Component
+public class HttpClient5Monitor {
+
+    private final PoolingHttpClientConnectionManager connectionManager;
+
+    public HttpClient5Monitor(CloseableHttpClient httpClient5) {
+        this.connectionManager = (PoolingHttpClientConnectionManager) 
+            httpClient5.getConnectionManager();
+    }
+
+    @Scheduled(fixedRate = 30000) // 每30秒执行一次
+    public void logConnectionPoolStats() {
+        System.out.println("=== HttpClient5 连接池状态 ===");
+        System.out.println("总连接数: " + connectionManager.getTotalStats().getMax());
+        System.out.println("可用连接: " + connectionManager.getTotalStats().getAvailable());
+        System.out.println("租赁连接: " + connectionManager.getTotalStats().getLeased());
+        System.out.println("等待连接: " + connectionManager.getTotalStats().getPending());
+        System.out.println("=============================");
+    }
+
+    @PreDestroy
+    public void cleanup() {
+        if (connectionManager != null) {
+            connectionManager.close();
+        }
+    }
+}
+
+关键优势总结：
+
+1. 官方推荐：HttpClient 5.x 是 Spring 6.x 的推荐 HTTP 客户端
+2. HTTP/2 支持：原生支持 HTTP/2 协议
+3. 现代 API：使用新的超时 API（基于 
+"Timeout" 类）
+4. 更好的性能：改进的连接池和性能优化
+5. 主动维护：Apache 项目，持续更新和维护
+
+这种配置应该能很好地解决你的 muServer2 兼容性问题，同时提供优秀的性能和可维护性。
