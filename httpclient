@@ -71,3 +71,132 @@ public class GkeOptimizedRestClientConfig {
         return new HttpComponentsClientHttpRequestFactory(httpClient);
     }
 }
+
+
+
+
+
+
+@Component
+public class NonChunkedRestClient {
+    
+    private final RestClient restClient;
+    
+    public NonChunkedRestClient() {
+        this.restClient = createNonChunkedRestClient();
+    }
+    
+    private RestClient createNonChunkedRestClient() {
+        // 方案1：使用字节数组 + 自定义RequestFactory（最可靠）
+        ClientHttpRequestFactory requestFactory = createNonChunkedRequestFactory();
+        
+        return RestClient.builder()
+            .requestFactory(requestFactory)
+            .requestInterceptor(this::forceContentLength)
+            .build();
+    }
+    
+    private ClientHttpRequestFactory createNonChunkedRequestFactory() {
+        return new SimpleClientHttpRequestFactory() {
+            @Override
+            protected void prepareConnection(HttpURLConnection connection, String httpMethod) {
+                super.prepareConnection(connection, httpMethod);
+                // 强制禁用分块传输
+                connection.setChunkedStreamingMode(0);
+            }
+        };
+    }
+    
+    private ClientHttpRequest forceContentLength(ClientHttpRequest request, 
+                                                byte[] body, 
+                                                ClientHttpRequestExecution execution) throws IOException {
+        // 记录实际发送的头信息用于调试
+        System.out.println("=== 强制Content-Length前的头信息 ===");
+        request.getHeaders().forEach((key, values) -> {
+            System.out.println(key + ": " + values);
+        });
+        
+        if (body != null) {
+            // 移除可能存在的分块传输头
+            request.getHeaders().remove("Transfer-Encoding");
+            // 明确设置Content-Length
+            request.getHeaders().setContentLength(body.length);
+        }
+        
+        return execution.execute(request, body);
+    }
+    
+    public String sendToMuServer(User user) {
+        try {
+            ObjectMapper mapper = new ObjectMapper();
+            
+            // 关键步骤：使用字节数组而不是字符串
+            byte[] jsonBytes = mapper.writeValueAsBytes(user);
+            
+            String response = restClient.post()
+                .uri("你的muServer2地址")
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(jsonBytes)  // 使用字节数组
+                .retrieve()
+                .body(String.class);
+                
+            return response;
+            
+        } catch (Exception e) {
+            // 备用方案：尝试使用更底层的方法
+            return sendWithRawHttp(user);
+        }
+    }
+    
+    // 备用方案：使用最底层的HttpURLConnection
+    private String sendWithRawHttp(User user) {
+        try {
+            ObjectMapper mapper = new ObjectMapper();
+            String jsonBody = mapper.writeValueAsString(user);
+            byte[] jsonBytes = jsonBody.getBytes(StandardCharsets.UTF_8);
+            
+            URL url = new URL("你的muServer2地址");
+            HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+            connection.setRequestMethod("POST");
+            connection.setDoOutput(true);
+            connection.setRequestProperty("Content-Type", "application/json");
+            connection.setRequestProperty("Content-Length", String.valueOf(jsonBytes.length));
+            
+            // 明确禁用分块传输
+            connection.setChunkedStreamingMode(0);
+            connection.setFixedLengthStreamingMode(jsonBytes.length);
+            
+            try (OutputStream os = connection.getOutputStream()) {
+                os.write(jsonBytes);
+            }
+            
+            int responseCode = connection.getResponseCode();
+            if (responseCode == 200) {
+                try (BufferedReader reader = new BufferedReader(
+                    new InputStreamReader(connection.getInputStream()))) {
+                    StringBuilder response = new StringBuilder();
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        response.append(line);
+                    }
+                    return response.toString();
+                }
+            } else {
+                throw new RuntimeException("HTTP错误: " + responseCode);
+            }
+            
+        } catch (Exception e) {
+            throw new RuntimeException("原始HTTP请求失败", e);
+        }
+    }
+}
+
+
+
+
+
+
+
+
+
+
